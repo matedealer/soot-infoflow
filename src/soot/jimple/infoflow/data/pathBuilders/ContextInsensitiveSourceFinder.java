@@ -2,7 +2,6 @@ package soot.jimple.infoflow.data.pathBuilders;
 
 import heros.solver.CountingThreadPoolExecutor;
 
-import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
@@ -12,11 +11,10 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import soot.jimple.Stmt;
 import soot.jimple.infoflow.data.Abstraction;
 import soot.jimple.infoflow.data.AbstractionAtSink;
 import soot.jimple.infoflow.results.InfoflowResults;
-import soot.jimple.infoflow.solver.IInfoflowCFG;
+import soot.jimple.infoflow.solver.cfg.IInfoflowCFG;
 
 /**
  * Class for reconstructing abstraction paths from sinks to source
@@ -30,7 +28,8 @@ public class ContextInsensitiveSourceFinder extends AbstractAbstractionPathBuild
     private final InfoflowResults results = new InfoflowResults();
 	private final CountingThreadPoolExecutor executor;
 	
-	private static int lastTaskId = 0;
+	private int lastTaskId = 0;
+	private int numTasks = 0;
 	
 	/**
 	 * Creates a new instance of the {@link ContextInsensitiveSourceFinder} class
@@ -83,18 +82,18 @@ public class ContextInsensitiveSourceFinder extends AbstractAbstractionPathBuild
 							abstraction.getSourceContext().getAccessPath(),
 							abstraction.getSourceContext().getStmt(),
 							abstraction.getSourceContext().getUserData(),
-							Collections.<Stmt>emptyList());
+							null);
 					
 					// Sources may not have predecessors
 					assert abstraction.getPredecessor() == null;
 				}
 				else
-					if (abstraction.getPredecessor().registerPathFlag(taskId))
+					if (abstraction.getPredecessor().registerPathFlag(taskId, numTasks))
 						abstractionQueue.add(abstraction.getPredecessor());
 				
 				if (abstraction.getNeighbors() != null)
 					for (Abstraction nb : abstraction.getNeighbors())
-						if (nb.registerPathFlag(taskId))
+						if (nb.registerPathFlag(taskId, numTasks))
 							abstractionQueue.add(nb);
 			}
 		}
@@ -110,6 +109,7 @@ public class ContextInsensitiveSourceFinder extends AbstractAbstractionPathBuild
     	
     	// Start the propagation tasks
     	int curResIdx = 0;
+    	numTasks = res.size() + 1;
     	for (final AbstractionAtSink abs : res) {
     		logger.info("Building path " + ++curResIdx);
     		executor.execute(new SourceFindingTask(lastTaskId++, abs, abs.getAbstraction()));

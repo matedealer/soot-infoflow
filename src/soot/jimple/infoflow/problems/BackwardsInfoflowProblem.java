@@ -25,6 +25,7 @@ import soot.ArrayType;
 import soot.BooleanType;
 import soot.IntType;
 import soot.Local;
+import soot.PrimType;
 import soot.RefType;
 import soot.Scene;
 import soot.SootMethod;
@@ -61,7 +62,8 @@ import soot.jimple.infoflow.util.BaseSelector;
 import soot.jimple.toolkits.ide.icfg.BiDiInterproceduralCFG;
 
 /**
- * class which contains the flow functions for the backwards solver. This is required for on-demand alias analysis.
+ * class which contains the flow functions for the backwards solver. This is
+ * required for on-demand alias analysis.
  */
 public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 	private IInfoflowSolver fSolver;
@@ -290,6 +292,7 @@ public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 							// Special type handling for certain operations
 							if (defStmt.getRightOp() instanceof LengthExpr)
 								targetType = null;
+							
 							// We do not need to handle casts. Casts only make
 							// types more imprecise when going backwards.
 
@@ -299,6 +302,11 @@ public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 								if (!canCastType(rightValue.getType(), targetType))
 									addRightValue = false;
 							}
+							
+							// Make sure to only track static fields if it has been enabled
+							if (addRightValue)
+								if (!enableStaticFields && rightValue instanceof StaticFieldRef)
+									addRightValue = false;
 
 							if (addRightValue) {
 								Abstraction newAbs = source.deriveNewAbstraction(rightValue, cutFirstField,
@@ -338,7 +346,7 @@ public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 							if (source == getZeroValue())
 								return Collections.emptySet();
 							assert source.isAbstractionActive() || flowSensitiveAliasing;
-														
+							
 							Set<Abstraction> res = computeAliases(defStmt, leftValue, d1, source);
 							
 							if (destDefStmt != null && interproceduralCFG().isExitStmt(destDefStmt))
@@ -369,7 +377,7 @@ public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 				final boolean isSource = sourceSinkManager != null
 						? sourceSinkManager.getSourceInfo((Stmt) src, interproceduralCFG()) != null : false;
 				final boolean isSink = sourceSinkManager != null
-						? sourceSinkManager.isSink(stmt, interproceduralCFG()) : false;
+						? sourceSinkManager.isSink(stmt, interproceduralCFG(), null) : false;
 				
 				// This is not cached by Soot, so accesses are more expensive
 				// than one might think
@@ -401,8 +409,7 @@ public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 						
 						// taint is propagated in CallToReturnFunction, so we do not
 						// need any taint here if the taint wrapper is exclusive:
-						if(taintWrapper != null && taintWrapper.isExclusive(stmt, source.getAccessPath(),
-								interproceduralCFG()))
+						if(taintWrapper != null && taintWrapper.isExclusive(stmt, source))
 							return Collections.emptySet();
 						
 						// Only propagate the taint if the target field is actually read
@@ -475,6 +482,13 @@ public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 							// check if param is tainted:
 							for (int i = 0; i < ie.getArgCount(); i++) {
 								if (ie.getArg(i) == source.getAccessPath().getPlainValue()) {
+									// Primitive types and strings cannot have aliases and thus
+									// never need to be propagated back
+									if (source.getAccessPath().getBaseType() instanceof PrimType)
+										continue;
+									if (isStringType(source.getAccessPath().getBaseType()))
+										continue;
+									
 									Abstraction abs = source.deriveNewAbstraction(source.getAccessPath().copyWithNewValue
 											(paramLocals[i]), stmt);
 									res.add(abs);
@@ -510,6 +524,7 @@ public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 					
 					@Override
 					public Set<Abstraction> computeTargets(Abstraction source,
+							Abstraction d1,
 							Collection<Abstraction> callerD1s) {
 						if (source == getZeroValue())
 							return Collections.emptySet();
@@ -557,6 +572,13 @@ public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 										if (!AccessPath.canContainValue(originalCallArg))
 											continue;
 										if (!checkCast(source.getAccessPath(), originalCallArg.getType()))
+											continue;
+										
+										// Primitive types and strings cannot have aliases and thus
+										// never need to be propagated back
+										if (source.getAccessPath().getBaseType() instanceof PrimType)
+											continue;
+										if (isStringType(source.getAccessPath().getBaseType()))
 											continue;
 										
 										Abstraction abs = source.deriveNewAbstraction
@@ -608,12 +630,34 @@ public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 				
 				final SootMethod callee = invExpr.getMethod();
 				
+				final DefinitionStmt defStmt = iStmt instanceof DefinitionStmt
+						? (DefinitionStmt) iStmt : null;
+				
 				return new SolverCallToReturnFlowFunction() {
 					@Override
 					public Set<Abstraction> computeTargets(Abstraction d1, Abstraction source) {
 						if (source == getZeroValue())
 							return Collections.emptySet();
 						assert source.isAbstractionActive() || flowSensitiveAliasing;
+						
+						// Compute wrapper aliases
+						if (taintWrapper != null) {
+							Set<Abstraction> wrapperAliases = taintWrapper.getAliasesForMethod(
+									iStmt, d1, source);
+							if (wrapperAliases != null && !wrapperAliases.isEmpty()) {
+								Set<Abstraction> passOnSet = new HashSet<>(wrapperAliases.size());
+								for (Abstraction abs : wrapperAliases)
+									if (defStmt != null && defStmt.getLeftOp()
+											== abs.getAccessPath().getPlainValue()) {
+										// Do not pass on this taint, but trigger the forward analysis
+										for (Unit u : interproceduralCFG().getPredsOf(defStmt))
+											fSolver.processEdge(new PathEdge<Unit, Abstraction>(d1, u, abs));
+									}
+									else
+										passOnSet.add(abs);
+								return passOnSet;
+							}
+						}
 						
 						// If the callee does not read the given value, we also need to pass it on
 						// since we do not propagate it into the callee.
@@ -640,7 +684,7 @@ public class BackwardsInfoflowProblem extends AbstractInfoflowProblem {
 						for (int i = 0; i < callArgs.length; i++)
 							if (callArgs[i] == source.getAccessPath().getPlainValue())
 								return Collections.emptySet();
-						
+												
 						return Collections.singleton(source);
 					}
 				};

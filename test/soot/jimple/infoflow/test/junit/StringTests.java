@@ -17,7 +17,6 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import soot.jimple.infoflow.Infoflow;
@@ -49,7 +48,6 @@ public class StringTests extends JUnitTests {
     }
 	
 	@Test(timeout=600000)
-    @Ignore //Out of Memory in Original FlowDroid
     public void lowerCaseTest(){
     	Infoflow infoflow = initInfoflow();
     	List<String> epoints = new ArrayList<String>();
@@ -59,7 +57,6 @@ public class StringTests extends JUnitTests {
     }
 	
 	@Test(timeout=600000)
-	@Ignore //Out of Memory in Original FlowDroid
     public void upperCaseTest(){
     	Infoflow infoflow = initInfoflow();
     	List<String> epoints = new ArrayList<String>();

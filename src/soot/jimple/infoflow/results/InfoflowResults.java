@@ -15,16 +15,17 @@ import java.io.Writer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import soot.Value;
 import soot.jimple.InvokeExpr;
 import soot.jimple.Stmt;
 import soot.jimple.infoflow.collect.ConcurrentHashSet;
 import soot.jimple.infoflow.collect.MyConcurrentHashMap;
+import soot.jimple.infoflow.data.Abstraction;
 import soot.jimple.infoflow.data.AccessPath;
 
 /**
@@ -48,7 +49,21 @@ public class InfoflowResults {
 	 * @return The number of entries in this result object
 	 */
 	public int size() {
-		return this.results.size();
+		return this.results == null ? 0 : this.results.size();
+	}
+	
+	/**
+	 * Gets the total number of source-to-sink connections. If there are two
+	 * connections along different paths between the same source and sink,
+	 * size() will return 1, but numConnections() will return 2.
+	 * @return The number of source-to-sink connections in this result object
+	 */
+	public int numConnections() {
+		int num = 0;
+		if (this.results != null)
+			for (Entry<ResultSinkInfo, Set<ResultSourceInfo>> entry : this.results.entrySet())
+				num += entry.getValue().size();
+		return num;
 	}
 	
 	/**
@@ -57,7 +72,7 @@ public class InfoflowResults {
 	 * @return True if this result object is empty, otherwise false.
 	 */
 	public boolean isEmpty() {
-		return this.results.isEmpty();
+		return this.results == null || this.results.isEmpty();
 	}
 	
 	/**
@@ -67,7 +82,7 @@ public class InfoflowResults {
 	 * @return True if this result contains the given value as a sink, otherwise
 	 * false.
 	 */
-	public boolean containsSink(Value sink) {
+	public boolean containsSink(Stmt sink) {
 		for (ResultSinkInfo si : this.results.keySet())
 			if (si.getSink().equals(sink))
 				return true;
@@ -93,9 +108,33 @@ public class InfoflowResults {
 	public void addResult(AccessPath sink, Stmt sinkStmt,
 			AccessPath source, Stmt sourceStmt,
 			Object userData,
-			List<Stmt> propagationPath) {
+			List<Abstraction> propagationPath) {
+		// Get the statements and the access paths from the abstractions
+		List<Stmt> stmtPath = null;
+		List<AccessPath> apPath = null;
+		if (propagationPath != null) {
+			stmtPath = new ArrayList<Stmt>(propagationPath.size());
+			apPath = new ArrayList<AccessPath>(propagationPath.size());
+			for (Abstraction pathAbs : propagationPath) {
+				if (pathAbs.getCurrentStmt() != null) {
+					stmtPath.add(pathAbs.getCurrentStmt());
+					apPath.add(pathAbs.getAccessPath());
+				}
+			}
+		}
+		
+		// Add the result
+		addResult(sink, sinkStmt, source, sourceStmt, userData, stmtPath, apPath);
+	}
+	
+	public void addResult(AccessPath sink, Stmt sinkStmt,
+			AccessPath source, Stmt sourceStmt,
+			Object userData,
+			List<Stmt> propagationPath,
+			List<AccessPath> propagationAccessPath) {
 		this.addResult(new ResultSinkInfo(sink, sinkStmt),
-				new ResultSourceInfo(source, sourceStmt, userData, propagationPath));
+				new ResultSourceInfo(source, sourceStmt, userData, propagationPath,
+						propagationAccessPath));
 	}
 	
 	public void addResult(ResultSinkInfo sink, ResultSourceInfo source) {
@@ -122,7 +161,7 @@ public class InfoflowResults {
 	 * @return True if there is a path between the given source and sink, false
 	 * otherwise
 	 */
-	public boolean isPathBetween(Value sink, Value source) {
+	public boolean isPathBetween(Stmt sink, Stmt source) {
 		Set<ResultSourceInfo> sources = null;
 		for(ResultSinkInfo sI : this.results.keySet()){
 			if(sI.getSink().equals(sink)){

@@ -17,8 +17,8 @@ import soot.SootMethod;
 import soot.Value;
 import soot.jimple.InstanceInvokeExpr;
 import soot.jimple.Stmt;
+import soot.jimple.infoflow.data.Abstraction;
 import soot.jimple.infoflow.data.AccessPath;
-import soot.jimple.infoflow.solver.IInfoflowCFG;
 import soot.jimple.internal.JAssignStmt;
 
 /**
@@ -29,15 +29,9 @@ import soot.jimple.internal.JAssignStmt;
  *
  */
 public class IdentityTaintWrapper extends AbstractTaintWrapper {
-
-	@Override
-	public void initialize() {
-		// nothing to initialize yet
-	}
 	
 	@Override
-	public Set<AccessPath> getTaintsForMethod(Stmt stmt, AccessPath taintedPath,
-			IInfoflowCFG icfg) {
+	public Set<AccessPath> getTaintsForMethodInternal(Stmt stmt, AccessPath taintedPath) {
 		assert stmt.containsInvokeExpr();
 		
 		// For the moment, we don't implement static taints on wrappers. Pass it on
@@ -66,7 +60,7 @@ public class IdentityTaintWrapper extends AbstractTaintWrapper {
 	}
 
 	@Override
-	public boolean isExclusiveInternal(Stmt stmt, AccessPath taintedPath, IInfoflowCFG icfg) {
+	public boolean isExclusiveInternal(Stmt stmt, AccessPath taintedPath) {
 		assert stmt.containsInvokeExpr();
 		
 		// We are exclusive if the base object is tainted
@@ -90,8 +84,15 @@ public class IdentityTaintWrapper extends AbstractTaintWrapper {
 	}
 
 	@Override
-	public boolean supportsCallee(Stmt callSite, IInfoflowCFG icfg) {
+	public boolean supportsCallee(Stmt callSite) {
 		return true;
+	}
+
+	@Override
+	public Set<Abstraction> getAliasesForMethod(Stmt stmt, Abstraction d1,
+			Abstraction taintedPath) {
+		// We do not provide any aliases
+		return null;
 	}
 	
 }

@@ -41,8 +41,10 @@ import soot.jimple.infoflow.aliasing.PtsBasedAliasStrategy;
 import soot.jimple.infoflow.cfg.BiDirICFGFactory;
 import soot.jimple.infoflow.cfg.LibraryClassPatcher;
 import soot.jimple.infoflow.config.IInfoflowConfig;
+import soot.jimple.infoflow.data.Abstraction;
 import soot.jimple.infoflow.data.AbstractionAtSink;
 import soot.jimple.infoflow.data.AccessPath;
+import soot.jimple.infoflow.data.FlowDroidMemoryManager;
 import soot.jimple.infoflow.data.pathBuilders.DefaultPathBuilderFactory;
 import soot.jimple.infoflow.data.pathBuilders.IAbstractionPathBuilder;
 import soot.jimple.infoflow.data.pathBuilders.IPathBuilderFactory;
@@ -57,9 +59,10 @@ import soot.jimple.infoflow.problems.InfoflowProblem;
 import soot.jimple.infoflow.results.InfoflowResults;
 import soot.jimple.infoflow.results.ResultSinkInfo;
 import soot.jimple.infoflow.results.ResultSourceInfo;
-import soot.jimple.infoflow.solver.BackwardsInfoflowCFG;
-import soot.jimple.infoflow.solver.IInfoflowCFG;
-import soot.jimple.infoflow.solver.InfoflowCFG;
+import soot.jimple.infoflow.solver.IMemoryManager;
+import soot.jimple.infoflow.solver.cfg.BackwardsInfoflowCFG;
+import soot.jimple.infoflow.solver.cfg.IInfoflowCFG;
+import soot.jimple.infoflow.solver.cfg.InfoflowCFG;
 import soot.jimple.infoflow.solver.fastSolver.InfoflowSolver;
 import soot.jimple.infoflow.source.ISourceSinkManager;
 import soot.jimple.infoflow.util.InterproceduralConstantValuePropagator;
@@ -84,9 +87,10 @@ public class Infoflow extends AbstractInfoflow {
 	private static boolean useRecursiveAccessPaths = true;
 	private static boolean pathAgnosticResults = true;
 	private static boolean oneResultPerAccessPath = false;
+	private static boolean mergeNeighbors = false;
 	
 	private InfoflowResults results = null;
-	private final IPathBuilderFactory pathBuilderFactory;
+	private IPathBuilderFactory pathBuilderFactory;
 
 	private final String androidPath;
 	private final boolean forceAndroidJar;
@@ -296,7 +300,7 @@ public class Infoflow extends AbstractInfoflow {
 		}
 		return s;
 	}
-
+	
 	@Override
 	public void computeInfoflow(String appPath, String libPath,
 			IEntryPointCreator entryPointCreator,
@@ -351,10 +355,31 @@ public class Infoflow extends AbstractInfoflow {
 		// Run the analysis
         runAnalysis(sourcesSinks, seeds);
 	}
-
+	
+	/**
+	 * Conducts a taint analysis on an already initialized callgraph
+	 * @param sourcesSinks The sources and sinks to be used
+	 */
+	protected void runAnalysis(final ISourceSinkManager sourcesSinks) {
+		runAnalysis(sourcesSinks, null);
+	}
+	
+	/**
+	 * Conducts a taint analysis on an already initialized callgraph
+	 * @param sourcesSinks The sources and sinks to be used
+	 * @param additionalSeeds Additional seeds at which to create A ZERO fact
+	 * even if they are not sources
+	 */
 	private void runAnalysis(final ISourceSinkManager sourcesSinks, final Set<String> additionalSeeds) {
 		maxMemoryConsumption = -1;
 		ipcManager.updateJimpleForICC();
+		
+		// Some configuration options do not really make sense in combination
+		if (enableStaticFields && accessPathLength == 0)
+			throw new RuntimeException("Static field tracking must be disabled "
+					+ "if the access path length is zero");
+		if (accessPathLength < 0)
+			throw new RuntimeException("The access path length may not be negative");
 		
 		// Clear the base registrations from previous runs
 		AccessPath.clearBaseRegister();
@@ -367,8 +392,11 @@ public class Infoflow extends AbstractInfoflow {
         LibraryClassPatcher patcher = new LibraryClassPatcher();
         patcher.patchLibraries();
 		
-		// We explicitly select the packs we want to run for performance reasons
-		if (callgraphAlgorithm != CallgraphAlgorithm.OnDemand) {
+		// We explicitly select the packs we want to run for performance
+        // reasons. Do not re-run the callgraph algorithm if the host
+        // application already provides us with a CG.
+		if (callgraphAlgorithm != CallgraphAlgorithm.OnDemand
+				&& !Scene.v().hasCallGraph()) {
 	        PackManager.v().getPack("wjpp").apply();
 	        PackManager.v().getPack("cg").apply();
 		}
@@ -389,9 +417,11 @@ public class Infoflow extends AbstractInfoflow {
         	logger.info("Callgraph has {} edges", Scene.v().getCallGraph().size());
         iCfg = icfgFactory.buildBiDirICFG(callgraphAlgorithm);
 		        
-//        int numThreads = Runtime.getRuntime().availableProcessors();
-        int numThreads = 1;
+        int numThreads = Runtime.getRuntime().availableProcessors();
 		CountingThreadPoolExecutor executor = createExecutor(numThreads);
+		
+		// Initialize the memory manager
+		IMemoryManager<Abstraction> memoryManager = new FlowDroidMemoryManager();
 		
 		BackwardsInfoflowProblem backProblem;
 		InfoflowSolver backSolver;
@@ -403,6 +433,7 @@ public class Infoflow extends AbstractInfoflow {
 				backProblem.setFlowSensitiveAliasing(flowSensitiveAliasing);
 				
 				backSolver = new InfoflowSolver(backProblem, executor);
+				backSolver.setMemoryManager(memoryManager);
 				backSolver.setJumpPredecessors(!pathBuilderFactory.supportsPathReconstruction());
 //				backSolver.setEnableMergePointChecking(true);
 				
@@ -427,6 +458,7 @@ public class Infoflow extends AbstractInfoflow {
 		// Set the options
 		InfoflowSolver forwardSolver = new InfoflowSolver(forwardProblem, executor);
 		aliasingStrategy.setForwardSolver(forwardSolver);
+		forwardSolver.setMemoryManager(memoryManager);
 		forwardSolver.setJumpPredecessors(!pathBuilderFactory.supportsPathReconstruction());
 //		forwardSolver.setEnableMergePointChecking(true);
 		
@@ -457,20 +489,33 @@ public class Infoflow extends AbstractInfoflow {
 			backProblem.setInspectSinks(inspectSinks);
 		}
 		
+		// Print our configuration
 		if (!enableStaticFields)
 			logger.warn("Static field tracking is disabled, results may be incomplete");
 		if (!flowSensitiveAliasing || !aliasingStrategy.isFlowSensitive())
 			logger.warn("Using flow-insensitive alias tracking, results may be imprecise");
-
+		if (enableImplicitFlows)
+			logger.info("Implicit flow tracking is enabled");
+		else
+			logger.info("Implicit flow tracking is NOT enabled");
+		logger.info("Running with a maximum access path length of {}", getAccessPathLength());
+		if (pathAgnosticResults)
+			logger.info("Using path-agnostic result collection");
+		else
+			logger.info("Using path-sensitive result collection");
+		if (useRecursiveAccessPaths)
+			logger.info("Recursive access path shortening is enabled");
+		else
+			logger.info("Recursive access path shortening is NOT enabled");
+		
 		// We have to look through the complete program to find sources
 		// which are then taken as seeds.
 		int sinkCount = 0;
         logger.info("Looking for sources and sinks...");
         
-        for (SootMethod sm : getMethodsForSeeds(iCfg)){
-        	System.out.println("method: " + sm);
+        for (SootMethod sm : getMethodsForSeeds(iCfg))
 			sinkCount += scanMethodForSourcesSinks(sourcesSinks, forwardProblem, sm);
-        }
+        
 		// We optionally also allow additional seeds to be specified
 		if (additionalSeeds != null)
 			for (String meth : additionalSeeds) {
@@ -483,17 +528,21 @@ public class Infoflow extends AbstractInfoflow {
 						Collections.singleton(forwardProblem.zeroValue()));
 			}
 		
-		if (!forwardProblem.hasInitialSeeds() || sinkCount == 0){
-			logger.error("No sources or sinks found, aborting analysis");
+		// Report on the sources and sinks we have found
+		if (!forwardProblem.hasInitialSeeds()) {
+			logger.error("No sources found, aborting analysis");
 			return;
 		}
-
+		if (sinkCount == 0) {
+			logger.error("No sinks found, aborting analysis");
+			return;
+		}
 		logger.info("Source lookup done, found {} sources and {} sinks.", forwardProblem.getInitialSeeds().size(),
 				sinkCount);
 		
 		// Initialize the taint wrapper if we have one
 		if (taintWrapper != null)
-			taintWrapper.initialize();
+			taintWrapper.initialize(new InfoflowManager(forwardSolver, iCfg));
 		
 		forwardSolver.solve();
 		maxMemoryConsumption = Math.max(maxMemoryConsumption, getUsedMemory());
@@ -584,6 +633,7 @@ public class Infoflow extends AbstractInfoflow {
 			PackManager.v().writeOutput();
 		
 		maxMemoryConsumption = Math.max(maxMemoryConsumption, getUsedMemory());
+		System.out.println("Maximum memory consumption: " + maxMemoryConsumption / 1E6 + " MB");
 	}
 	
 	/**
@@ -770,7 +820,7 @@ public class Infoflow extends AbstractInfoflow {
 					forwardProblem.addInitialSeeds(u, Collections.singleton(forwardProblem.zeroValue()));
 					logger.debug("Source found: {}", u);
 				}
-				if (sourcesSinks.isSink(s, iCfg)) {
+				if (sourcesSinks.isSink(s, iCfg, null)) {
 		            logger.debug("Sink found: {}", u);
 					sinkCount++;
 				}
@@ -878,6 +928,24 @@ public class Infoflow extends AbstractInfoflow {
 	}
 	
 	/**
+	 * Gets whether neighbors at the same statement shall be merged into a
+	 * single abstraction
+	 * @return True if equivalent neighbor shall be merged, otherwise false
+	 */
+	public static boolean getMergeNeighbors() {
+		return mergeNeighbors;
+	}
+	
+	/**
+	 * Sets whether neighbors at the same statement shall be merged into a
+	 * single abstraction
+	 * @param value True if equivalent neighbor shall be merged, otherwise false
+	 */
+	public static void setMergeNeighbors(boolean value) {
+		mergeNeighbors = value;
+	}
+	
+	/**
 	 * Adds a handler which is invoked whenever a taint is propagated
 	 * @param handler The handler to be invoked when propagating taints
 	 */
@@ -905,6 +973,15 @@ public class Infoflow extends AbstractInfoflow {
 	 */
 	public long getMaxMemoryConsumption() {
 		return this.maxMemoryConsumption;
+	}
+	
+	/**
+	 * Sets the path builder factory to be used in subsequent data flow analyses
+	 * @param factory The path bilder factory to use for constructing path
+	 * reconstruction algorithms
+	 */
+	public void setPathBuilderFactory(IPathBuilderFactory factory) {
+		this.pathBuilderFactory = factory;
 	}
 	
 }

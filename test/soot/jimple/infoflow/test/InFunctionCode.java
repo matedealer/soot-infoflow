@@ -55,4 +55,5 @@ public class InFunctionCode {
 		data.i = c;
 		return b;
 	}
+
 }

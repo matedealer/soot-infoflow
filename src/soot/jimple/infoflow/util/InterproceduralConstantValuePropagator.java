@@ -54,7 +54,7 @@ import soot.jimple.ThisRef;
 import soot.jimple.ThrowStmt;
 import soot.jimple.infoflow.entryPointCreators.BaseEntryPointCreator;
 import soot.jimple.infoflow.entryPointCreators.IEntryPointCreator;
-import soot.jimple.infoflow.solver.IInfoflowCFG;
+import soot.jimple.infoflow.solver.cfg.IInfoflowCFG;
 import soot.jimple.infoflow.source.ISourceSinkManager;
 import soot.jimple.infoflow.taintWrappers.ITaintPropagationWrapper;
 import soot.jimple.internal.JAssignStmt;
@@ -263,13 +263,15 @@ public class InterproceduralConstantValuePropagator extends SceneTransformer {
 		SootMethod method = callSite.getInvokeExpr().getMethod();
 		
 		// If this method is a source on its own, we must keep it
-		if (sourceSinkManager.getSourceInfo((Stmt) callSite, icfg) != null) {
+		if (sourceSinkManager != null
+				&& sourceSinkManager.getSourceInfo((Stmt) callSite, icfg) != null) {
 			methodFieldReads.put(method, true);
 			return true;
 		}
 		
 		// If this method is a sink, we must keep it as well
-		if (sourceSinkManager.isSink((Stmt) callSite, icfg)) {
+		if (sourceSinkManager != null
+				&& sourceSinkManager.isSink((Stmt) callSite, icfg, null)) {
 			methodSinks.put(method, true);
 			return true;
 		}
@@ -356,7 +358,7 @@ public class InterproceduralConstantValuePropagator extends SceneTransformer {
 					
 					// If we have a taint wrapper, we need to keep the stub untouched since we
 					// don't know what artificial taint the wrapper will come up with
-					if (taintWrapper != null && taintWrapper.supportsCallee(assign, icfg))
+					if (taintWrapper != null && taintWrapper.supportsCallee(assign))
 						continue;
 					
 					// If this is a call to a source method, we do not propagate
@@ -385,7 +387,7 @@ public class InterproceduralConstantValuePropagator extends SceneTransformer {
 						// We don't have side effects, so we can just change
 						// a = b.foo() into a = 0.
 						caller.getActiveBody().getUnits().swapWith(assign, assignConst);
-						if (!excludedMethods.contains(caller))
+						if (excludedMethods == null || !excludedMethods.contains(caller))
 							ConstantPropagatorAndFolder.v().transform(caller.getActiveBody());
 						
 						// Fix the callgraph
@@ -396,7 +398,7 @@ public class InterproceduralConstantValuePropagator extends SceneTransformer {
 						// We have side effects, so we need to keep the method call. Change
 						// a = b.foo() into b.foo(); a = 0;
 						caller.getActiveBody().getUnits().insertAfter(assignConst, assign);
-						if (!excludedMethods.contains(caller)) 
+						if (excludedMethods == null || !excludedMethods.contains(caller)) 
 							ConstantPropagatorAndFolder.v().transform(caller.getActiveBody());
 						caller.getActiveBody().getUnits().remove(assignConst);
 						
@@ -552,14 +554,15 @@ public class InterproceduralConstantValuePropagator extends SceneTransformer {
 			// If this method calls another method for which we have a taint
 			// wrapper, we need to conservatively assume that the taint wrapper
 			// can do anything
-			if (taintWrapper != null && taintWrapper.supportsCallee(s, icfg)) {
+			if (taintWrapper != null && taintWrapper.supportsCallee(s)) {
 				methodSideEffects.put(method, true);
 				return true;
 			}
 			
 			if (s.containsInvokeExpr()) {
 				// If this method calls a sink, we need to keep it
-				if (sourceSinkManager.isSink((Stmt) u, icfg)) {
+				if (sourceSinkManager != null
+						&& sourceSinkManager.isSink((Stmt) u, icfg, null)) {
 					methodSinks.put(method, true);
 					return true;
 				}

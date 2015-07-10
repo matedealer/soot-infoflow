@@ -19,9 +19,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import soot.ArrayType;
-import soot.IntType;
+import soot.BooleanType;
 import soot.Local;
-import soot.LongType;
 import soot.PrimType;
 import soot.RefType;
 import soot.Scene;
@@ -40,8 +39,8 @@ import soot.jimple.infoflow.data.AccessPath;
 import soot.jimple.infoflow.handlers.TaintPropagationHandler;
 import soot.jimple.infoflow.nativ.DefaultNativeCallHandler;
 import soot.jimple.infoflow.nativ.NativeCallHandler;
-import soot.jimple.infoflow.solver.IInfoflowCFG;
 import soot.jimple.infoflow.solver.IInfoflowSolver;
+import soot.jimple.infoflow.solver.cfg.IInfoflowCFG;
 import soot.jimple.infoflow.source.ISourceSinkManager;
 import soot.jimple.infoflow.taintWrappers.ITaintPropagationWrapper;
 import soot.jimple.toolkits.ide.DefaultJimpleIFDSTabulationProblem;
@@ -99,13 +98,19 @@ public abstract class AbstractInfoflowProblem extends DefaultJimpleIFDSTabulatio
 		if (sourceType == null)
 			return true;
 		
+		// If both types are equal, we allow the cast
+		if (sourceType == destType)
+			return true;
+		
+		// If we have a reference type, we use the Soot hierarchy
 		if (Scene.v().getFastHierarchy().canStoreType(destType, sourceType) // cast-up, i.e. Object to String
 				|| Scene.v().getFastHierarchy().canStoreType(sourceType, destType)) // cast-down, i.e. String to Object
 			return true;
 		
+		// If both types are primitive, they can be cast unless a boolean type
+		// is involved
 		if (destType instanceof PrimType && sourceType instanceof PrimType)
-			if (sourceType instanceof LongType && destType instanceof IntType
-					|| destType instanceof LongType && sourceType instanceof IntType)
+			if (destType != BooleanType.v() && sourceType != BooleanType.v())
 				return true;
 			
 		return false;
@@ -494,6 +499,18 @@ public abstract class AbstractInfoflowProblem extends DefaultJimpleIFDSTabulatio
 				return true;
 		}
 		return false;
+	}
+	
+	/**
+	 * Checks whether the given type is a string
+	 * @param tp The type of check
+	 * @return True if the given type is a string, otherwise false
+	 */
+	protected boolean isStringType(Type tp) {
+		if (!(tp instanceof RefType))
+			return false;
+		RefType refType = (RefType) tp;
+		return refType.getClassName().equals("java.lang.String");
 	}
 
 }

@@ -31,23 +31,14 @@ public interface ISourceSinkManager {
 	public SourceInfo getSourceInfo(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg);
 	
 	/**
-	 * determines if a method called by the Stmt is a sink method or not
-	 * @param sCallSite a Stmt which should include an invokeExrp calling a method
-	 * @param cfg the interprocedural controlflow graph
-	 * @return true if sink method is called
-	 */
-	public boolean isSink(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg);
-
-	/**
 	 * Checks if the given access path at this statement will leak.
-	 * @param sCallSite the call site to check
-	 * @param cfg the control flow graph of the current problem
-	 * @param index If the access path is from the base object of the callee, the index must be negative. 
-	 * 				If the given access path is from a parameter, the index is the index of the parameter counted from 0.
-	 * @param ap the access path to check
-	 * @return true if the access path will leak in this method, false if not or if this method is not a sink
-	 * @author Daniel Magin
+	 * @param sCallSite The call site to check
+	 * @param cfg The control flow graph of the current problem
+	 * @param ap The access path to check. Pass null to check whether the given
+	 * statement can be a sink for any given access path.
+	 * @return True if the access path will leak in this method, false if not or
+	 * if this method is not a sink
 	 */
-	boolean leaks(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg, int index, AccessPath ap);
+	boolean isSink(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg, AccessPath ap);
 
 }

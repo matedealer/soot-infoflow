@@ -16,7 +16,7 @@ import soot.jimple.infoflow.data.AbstractionAtSink;
 import soot.jimple.infoflow.data.SourceContext;
 import soot.jimple.infoflow.data.SourceContextAndPath;
 import soot.jimple.infoflow.results.InfoflowResults;
-import soot.jimple.infoflow.solver.IInfoflowCFG;
+import soot.jimple.infoflow.solver.cfg.IInfoflowCFG;
 
 /**
  * Class for reconstructing abstraction paths from sinks to source. This builder
@@ -157,7 +157,7 @@ public class ContextSensitivePathBuilder extends AbstractAbstractionPathBuilder 
 				sourceContext.getAccessPath(),
 				sourceContext.getStmt(),
 				sourceContext.getUserData(),
-				scap.getPath());
+				scap.getAbstractionPath());
 		return true;
 	}
 	

@@ -17,6 +17,7 @@ import java.util.Set;
 import soot.ArrayType;
 import soot.Local;
 import soot.RefType;
+import soot.Scene;
 import soot.SootField;
 import soot.Type;
 import soot.Value;
@@ -208,6 +209,13 @@ public class AccessPath implements Cloneable {
 			fieldTypes = appendingFieldTypes;
 		}
 		
+		// If we don't want to track fields at all, we can cut the field
+		// processing short
+		if (Infoflow.getAccessPathLength() == 0) {
+			fields = null;
+			fieldTypes = null;
+		}
+		
 		// Cut the first field if requested
 		if (cutFirstField && fields != null && fields.length > 0) {
 			SootField[] newFields = new SootField[fields.length - 1];
@@ -224,6 +232,58 @@ public class AccessPath implements Cloneable {
 				|| this.value.getType() instanceof ArrayType
 				|| fields == null || fields.length == 0;
 		
+		// Make sure that the actual types are always as precise as the declared ones
+		if (fields != null)
+			for (int i = 0; i < fields.length; i++)
+				if (fields[i].getType() != fieldTypes[i]
+						&& Scene.v().getFastHierarchy().canStoreType(fields[i].getType(), fieldTypes[i]))
+					fieldTypes[i] = fields[i].getType();
+		
+		// We can always merge a.inner.this$0.c to a.c. We do this first so that
+		// we don't create recursive bases for stuff we don't need anyway.
+		if (fields != null) {
+			for (int i = 0; i < fields.length; i++) {
+				// Is this a reference to an outer class?
+				if (fields[i].getName().startsWith("this$")) {
+					// Get the name of the outer class
+					int outerClassIdx = Integer.parseInt(fields[i].getName().substring(5));
+					String outerClassName = ((RefType) fields[i].getType()).getClassName();
+					for (int j = 0; j < outerClassIdx; j++)
+						outerClassName = outerClassName.substring(0, outerClassName.indexOf("$"));
+					
+					// Check the base object
+					int startIdx = -1;
+					if (this.value != null && ((RefType) this.value.getType())
+							.getClassName().equals(outerClassName)) {
+						startIdx = 0;
+					}
+					else {
+						// Scan forward to find the same reference
+						for (int j = 0; j < i; j++)
+							if (((RefType) fields[j].getType()).getClassName().equals(outerClassName)) {
+								startIdx = j;
+								break;
+							}
+					}
+					
+					if (startIdx >= 0) {
+						SootField[] newFields = new SootField[fields.length - (i - startIdx) - 1];
+						Type[] newFieldTypes = new Type[fieldTypes.length - (i - startIdx) - 1];
+						
+						System.arraycopy(fields, 0, newFields, 0, startIdx);
+						System.arraycopy(fieldTypes, 0, newFieldTypes, 0, startIdx);
+						
+						System.arraycopy(fields, i + 1, newFields, startIdx, fields.length - i - 1);
+						System.arraycopy(fieldTypes, i + 1, newFieldTypes, startIdx, fieldTypes.length - i - 1);
+						
+						fields = newFields;
+						fieldTypes = newFieldTypes;
+						break;
+					}
+				}
+			}
+		}
+		
 		// Check for recursive data structures. If a last field maps back to something we
 		// already know, we build a repeatable component from it
 		boolean recursiveCutOff = false;
@@ -236,7 +296,7 @@ public class AccessPath implements Cloneable {
 				final Type eiType = ei == 0 ? this.baseType : fieldTypes[ei - 1];
 				int ej = ei;
 				while (ej < fields.length) {
-					if (fieldTypes[ej] == eiType) {
+					if (fieldTypes[ej] == eiType || fields[ej].getType() == eiType) {
 						// The types match, f0...fi...fj maps back to an object of the
 						// same type as f0...fi. We must thus convert the access path
 						// to f0...fi-1[...fj]fj+1
@@ -510,12 +570,24 @@ public class AccessPath implements Cloneable {
 	 * the val parameter
 	 */
 	public AccessPath copyWithNewValue(Value val, Type newType, boolean cutFirstField){
+		return copyWithNewValue(val, newType, cutFirstField, true);
+	}
+	
+	/**
+	 * value val gets new base, fields are preserved.
+	 * @param val The new base value
+	 * @param reduceBases True if circurlar types shall be reduced to bases
+	 * @return This access path with the base replaced by the value given in
+	 * the val parameter
+	 */
+	public AccessPath copyWithNewValue(Value val, Type newType, boolean cutFirstField,
+			boolean reduceBases) {
 		if (this.value != null && this.value.equals(val)
 				&& this.baseType.equals(newType))
 			return this;
 		
 		return new AccessPath(val, fields, newType, fieldTypes, this.taintSubFields,
-				cutFirstField, true);
+				cutFirstField, reduceBases);
 	}
 	
 	@Override
@@ -598,11 +670,10 @@ public class AccessPath implements Cloneable {
 			System.arraycopy(this.fields, 0, fields, 0, this.fields.length);
 			System.arraycopy(this.fieldTypes, 0, fieldTypes, 0, this.fieldTypes.length);
 		}
-		if (apFields != null)
-			if (apFields != null && apFields.length > 0) {
-				System.arraycopy(apFields, 0, fields, offset, apFields.length);
-				System.arraycopy(apFieldTypes, 0, fieldTypes, offset, apFieldTypes.length);
-			}
+		if (apFields != null && apFields.length > 0) {
+			System.arraycopy(apFields, 0, fields, offset, apFields.length);
+			System.arraycopy(apFieldTypes, 0, fieldTypes, offset, apFieldTypes.length);
+		}
 		
 		return new AccessPath(this.value, fields, baseType, fieldTypes, taintSubFields);
 	}

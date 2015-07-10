@@ -36,8 +36,8 @@ import soot.jimple.DefinitionStmt;
 import soot.jimple.InstanceInvokeExpr;
 import soot.jimple.InvokeExpr;
 import soot.jimple.Stmt;
+import soot.jimple.infoflow.data.Abstraction;
 import soot.jimple.infoflow.data.AccessPath;
-import soot.jimple.infoflow.solver.IInfoflowCFG;
 import soot.jimple.infoflow.util.SootMethodRepresentationParser;
 
 import com.google.common.cache.CacheBuilder;
@@ -173,15 +173,9 @@ public class EasyTaintWrapper extends AbstractTaintWrapper implements Cloneable 
 	public EasyTaintWrapper(EasyTaintWrapper taintWrapper) {
 		this(taintWrapper.classList, taintWrapper.excludeList, taintWrapper.killList, taintWrapper.includeList);
 	}
-	
+		
 	@Override
-	public void initialize() {
-		// nothing to initialize yet
-	}
-	
-	@Override
-	public Set<AccessPath> getTaintsForMethod(Stmt stmt, AccessPath taintedPath,
-			IInfoflowCFG icfg) {
+	public Set<AccessPath> getTaintsForMethodInternal(Stmt stmt, AccessPath taintedPath) {
 		if (!stmt.containsInvokeExpr())
 			return Collections.emptySet();
 		
@@ -198,7 +192,7 @@ public class EasyTaintWrapper extends AbstractTaintWrapper implements Cloneable 
 			return Collections.singleton(taintedPath);
 		
 		// Do we handle equals() and hashCode() separately?
-		final String subSig = method.getSubSignature();
+		final String subSig = stmt.getInvokeExpr().getMethodRef().getSubSignature().getString();
 		boolean taintEqualsHashCode = alwaysModelEqualsHashCode
 				&& (subSig.equals("boolean equals(java.lang.Object)") || subSig.equals("int hashCode()"));
 		
@@ -420,7 +414,7 @@ public class EasyTaintWrapper extends AbstractTaintWrapper implements Cloneable 
 	}
 	
 	@Override
-	public boolean isExclusiveInternal(Stmt stmt, AccessPath taintedPath, IInfoflowCFG icfg) {
+	public boolean isExclusiveInternal(Stmt stmt, AccessPath taintedPath) {
 		SootMethod method = stmt.getInvokeExpr().getMethod();
 		
 		// Do we have an entry for at least one entry in the given class?
@@ -530,7 +524,7 @@ public class EasyTaintWrapper extends AbstractTaintWrapper implements Cloneable 
 	}
 	
 	@Override
-	public boolean supportsCallee(Stmt callSite, IInfoflowCFG icfg) {
+	public boolean supportsCallee(Stmt callSite) {
 		// We need an invocation expression
 		if (!callSite.containsInvokeExpr())
 			return false;
@@ -540,10 +534,12 @@ public class EasyTaintWrapper extends AbstractTaintWrapper implements Cloneable 
 			return false;
 				
 		// We need a method that can create a taint
-		if (!aggressiveMode
-				&& getMethodWrapType(method.getSubSignature(), method.getDeclaringClass()) 
-						!= MethodWrapType.CreateTaint)
-			return false;
+		if (!aggressiveMode) {
+			// Check for a cached wrap type
+			final MethodWrapType wrapType = methodWrapCache.getUnchecked(method);
+			if (wrapType != MethodWrapType.CreateTaint)
+				return false;
+		}
 		
 		// We need at least one non-constant argument or a tainted base
 		if (callSite.getInvokeExpr() instanceof InstanceInvokeExpr)
@@ -552,6 +548,13 @@ public class EasyTaintWrapper extends AbstractTaintWrapper implements Cloneable 
 			if (!(val instanceof Constant))
 				return true;
 		return false;
+	}
+
+	@Override
+	public Set<Abstraction> getAliasesForMethod(Stmt stmt, Abstraction d1,
+			Abstraction taintedPath) {
+		// We do not provide any aliases
+		return null;
 	}
 		
 }

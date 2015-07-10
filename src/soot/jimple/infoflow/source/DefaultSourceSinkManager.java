@@ -16,16 +16,13 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 
-import soot.Local;
 import soot.SootMethod;
 import soot.Unit;
 import soot.Value;
-import soot.jimple.AnyNewExpr;
-import soot.jimple.AssignStmt;
-import soot.jimple.Constant;
 import soot.jimple.DefinitionStmt;
+import soot.jimple.IdentityStmt;
 import soot.jimple.InstanceInvokeExpr;
-import soot.jimple.InvokeExpr;
+import soot.jimple.ParameterRef;
 import soot.jimple.ReturnStmt;
 import soot.jimple.Stmt;
 import soot.jimple.infoflow.data.AccessPath;
@@ -35,16 +32,14 @@ import soot.jimple.infoflow.data.AccessPath;
  * 
  * @author Steven Arzt
  */
-public class DefaultSourceSinkManager extends MethodBasedSourceSinkManager {
+public class DefaultSourceSinkManager implements ISourceSinkManager  {
 
 	private Collection<String> sources;
 	private Collection<String> sinks;
 
 	private Collection<String> returnTaintMethods;
 	private Collection<String> parameterTaintMethods;
-
-	private static final SourceInfo sourceInfo = new SourceInfo(true);
-
+	
 	/**
 	 * Creates a new instance of the {@link DefaultSourceSinkManager} class
 	 * 
@@ -97,74 +92,61 @@ public class DefaultSourceSinkManager extends MethodBasedSourceSinkManager {
 	public void setSinks(List<String> sinks) {
 		this.sinks = sinks;
 	}
-
-	@Override
-	public SourceInfo getSourceMethodInfo(SootMethod sMethod) {
-		if (!sources.contains(sMethod.toString()))
-			return null;
-		return sourceInfo;
-	}
-
-	@Override
-	public boolean isSinkMethod(SootMethod sMethod) {
-		return sinks.contains(sMethod.toString());
-	}
-
+	
 	@Override
 	public SourceInfo getSourceInfo(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg) {
-		// check wether this is asked from a call to return flow function or
-		// from a call flow function:
-		SootMethod method = null;
-		boolean isCallFlowFunction = false;
-		if (sCallSite.containsInvokeExpr()) {
-			method = sCallSite.getInvokeExpr().getMethod();
-		} else {
-			method = cfg.getMethodOf(sCallSite);
-			isCallFlowFunction = true;
-		}
-		// check if this is a source
-		if (!sources.contains(method.toString()) && !parameterTaintMethods.contains(method.toString()) && !returnTaintMethods.contains(method.toString())) {
-			return null;
-		}
-
-		AccessPath ap = null;
-		AccessPath[] retAP = null, baseAP = null;
-		AccessPath[][] paramAPs = null;
-
-		// if this method has a used return value, taint it
-		if ((!isCallFlowFunction && method.getReturnType() != null && sCallSite instanceof DefinitionStmt)) {
-			retAP = new AccessPath[1];
-			Value leftOp = ((DefinitionStmt) sCallSite).getLeftOp();
-			ap = new AccessPath(leftOp, true);
-			retAP[0] = ap;
-			// else if this is not a static method taint its base object
-		} else if (!isCallFlowFunction && sCallSite.getInvokeExpr() instanceof InstanceInvokeExpr) {
-			baseAP = new AccessPath[1];
-			Value base = ((InstanceInvokeExpr) sCallSite.getInvokeExpr()).getBase();
-			ap = new AccessPath(base, true);
-			baseAP[0] = ap;
-		}
-		// if we have to taint parameters do this now
-		if (parameterTaintMethods.contains(method.toString())) {
-			paramAPs = new AccessPath[method.getParameterCount()][1];
-			for (int i = 0; i < paramAPs.length; i++) {
-				Value v = (isCallFlowFunction) ? method.getActiveBody().getParameterLocal(i) : ((InvokeExpr) sCallSite).getArg(i);
-				paramAPs[i][0] = new AccessPath(v, true);
+		SootMethod callee = sCallSite.containsInvokeExpr() ?
+				sCallSite.getInvokeExpr().getMethod() : null;
+		
+		AccessPath targetAP = null;
+		if (callee != null && sources.contains(callee.toString())) {
+			if (callee.getReturnType() != null 
+					&& sCallSite instanceof DefinitionStmt) {
+				// Taint the return value
+				Value leftOp = ((DefinitionStmt) sCallSite).getLeftOp();
+				targetAP = new AccessPath(leftOp, true);
+			}
+			else if (sCallSite.getInvokeExpr() instanceof InstanceInvokeExpr) {
+				// Taint the base object
+				Value base = ((InstanceInvokeExpr) sCallSite.getInvokeExpr()).getBase();
+				targetAP = new AccessPath(base, true);
 			}
 		}
-		AccessPathBundle bundle = new AccessPathBundle(baseAP, null, paramAPs, null, retAP);
-		return new SourceInfo(sourceInfo.getTaintSubFields(), sourceInfo.getUserData(), bundle);
+		// Check whether we need to taint parameters
+		else if (sCallSite instanceof IdentityStmt) {
+			IdentityStmt istmt = (IdentityStmt) sCallSite;
+			if (istmt.getRightOp() instanceof ParameterRef) {
+				ParameterRef pref = (ParameterRef) istmt.getRightOp();
+				SootMethod currentMethod = cfg.getMethodOf(istmt);
+				if (parameterTaintMethods.contains(currentMethod.toString()))
+					targetAP = new AccessPath(currentMethod.getActiveBody()
+							.getParameterLocal(pref.getIndex()), true);
+			}
+		}
+		
+		if (targetAP == null)
+			return null;
+		
+		// Create the source information data structure
+		return new SourceInfo(targetAP);
 	}
 
 	@Override
-	public boolean isSink(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg) {
-		if (super.isSink(sCallSite, cfg))
+	public boolean isSink(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg,
+			AccessPath ap) {
+		// Check whether values returned by the current method are to be
+		// considered as sinks
+		if (this.returnTaintMethods != null
+				&& sCallSite instanceof ReturnStmt
+				&& this.returnTaintMethods.contains(cfg.getMethodOf(sCallSite).getSignature()))
 			return true;
-
-		if (sCallSite instanceof ReturnStmt)
-			if (this.returnTaintMethods != null && this.returnTaintMethods.contains(cfg.getMethodOf(sCallSite).getSignature()))
-				return true;
-
+		
+		// Check whether the callee is a sink
+		if (this.sinks != null
+				&& sCallSite.containsInvokeExpr()
+				&& this.sinks.contains(sCallSite.getInvokeExpr().getMethod().getSignature()))
+			return true;
+		
 		return false;
 	}
 
@@ -177,7 +159,7 @@ public class DefaultSourceSinkManager extends MethodBasedSourceSinkManager {
 	 *            taint sources
 	 */
 	public void setParameterTaintMethods(List<String> parameterTaintMethods) {
-		this.parameterTaintMethods = this.parameterTaintMethods;
+		this.parameterTaintMethods = parameterTaintMethods;
 	}
 
 	/**
@@ -191,10 +173,5 @@ public class DefaultSourceSinkManager extends MethodBasedSourceSinkManager {
 	public void setReturnTaintMethods(List<String> returnTaintMethods) {
 		this.returnTaintMethods = returnTaintMethods;
 	}
-
-	@Override
-	public boolean leaks(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg, int index, AccessPath ap) {
-		return isSink(sCallSite, cfg);
-	}
-
+	
 }

@@ -12,7 +12,6 @@ package soot.jimple.infoflow.data;
 
 
 import java.util.ArrayList;
-import java.util.BitSet;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -23,8 +22,10 @@ import soot.Type;
 import soot.Unit;
 import soot.Value;
 import soot.jimple.Stmt;
+import soot.jimple.infoflow.Infoflow;
+import soot.jimple.infoflow.collect.AtomicBitSet;
 import soot.jimple.infoflow.collect.ConcurrentHashSet;
-import soot.jimple.infoflow.solver.IInfoflowCFG.UnitContainer;
+import soot.jimple.infoflow.solver.cfg.IInfoflowCFG.UnitContainer;
 import soot.jimple.infoflow.solver.fastSolver.FastSolverLinkedNode;
 import soot.jimple.internal.JimpleLocal;
 
@@ -43,7 +44,7 @@ public class Abstraction implements Cloneable, FastSolverLinkedNode<Abstraction,
 	/**
 	 * the access path contains the currently tainted variable or field
 	 */
-	private final AccessPath accessPath;
+	private AccessPath accessPath;
 	
 	private Abstraction predecessor = null;
 	private Set<Abstraction> neighbors = null;
@@ -78,7 +79,7 @@ public class Abstraction implements Cloneable, FastSolverLinkedNode<Abstraction,
 	 */
 	private boolean dependsOnCutAP = false;
 	
-	private BitSet pathFlags = null;
+	private AtomicBitSet pathFlags = null;
 	
 	public Abstraction(AccessPath sourceVal,
 			Stmt sourceStmt,
@@ -115,7 +116,6 @@ public class Abstraction implements Cloneable, FastSolverLinkedNode<Abstraction,
 			sourceContext = null;
 			exceptionThrown = false;
 			activationUnit = null;
-			flowSensitiveAliasing = true;
 			isImplicit = false;
 		}
 		else {
@@ -495,27 +495,30 @@ public class Abstraction implements Cloneable, FastSolverLinkedNode<Abstraction,
 	
 	@Override
 	public void addNeighbor(Abstraction originalAbstraction) {
-		assert originalAbstraction.equals(this);
-		
 		// We should not register ourselves as a neighbor
 		if (originalAbstraction == this)
 			return;
 		
 		// We should not add identical nodes as neighbors
 		if (this.predecessor == originalAbstraction.predecessor
-				&& this.currentStmt == originalAbstraction.currentStmt)
+				&& this.currentStmt == originalAbstraction.currentStmt
+				&& this.predecessor == originalAbstraction.predecessor)
 			return;
 		
 		synchronized (this) {
 			if (neighbors == null)
 				neighbors = Sets.newIdentityHashSet();
-			else {
+			else if (Infoflow.getMergeNeighbors()) {
 				// Check if we already have an identical neighbor
-				for (Abstraction nb : neighbors)
+				for (Abstraction nb : neighbors) {
+					if (nb == originalAbstraction)
+						return;
 					if (originalAbstraction.predecessor == nb.predecessor
-							&& originalAbstraction.currentStmt == nb.currentStmt) {
+							&& originalAbstraction.currentStmt == nb.currentStmt
+							&& originalAbstraction.predecessor == nb.predecessor) {
 						return;
 					}
+				}
 			}
 			this.neighbors.add(originalAbstraction);
 		}
@@ -564,16 +567,21 @@ public class Abstraction implements Cloneable, FastSolverLinkedNode<Abstraction,
 	 * @return True if the worker thread with the given ID has not been
 	 * registered before, otherwise false
 	 */
-	public boolean registerPathFlag(int id) {
+	public boolean registerPathFlag(int id, int maxSize) {
 		if (pathFlags != null && id < pathFlags.size() && pathFlags.get(id))
 			return false;
 		
-		synchronized (this) {
-			if (pathFlags == null)
-				pathFlags = new BitSet();
-			pathFlags.set(id);
+		if (pathFlags == null) {
+			synchronized (this) {
+				if (pathFlags == null) {
+					// Make sure that the field is set only after the constructor
+					// is done and the object is fully usable
+					AtomicBitSet pf = new AtomicBitSet(maxSize);
+					pathFlags = pf;
+				}
+			}
 		}
-		return true;
+		return pathFlags.set(id);
 	}
 	
 	public Abstraction injectSourceContext(SourceContext sourceContext) {
@@ -588,4 +596,16 @@ public class Abstraction implements Cloneable, FastSolverLinkedNode<Abstraction,
 		return abs;
 	}
 	
+	/**
+	 * For internal use by memory manager only. Setting a new access path will
+	 * not update any dependent data such as cached hashes. Handle with care!
+	 */
+	void setAccessPath(AccessPath accessPath) {
+		this.accessPath = accessPath;
+	}
+	
+	void setCurrentStmt(Stmt currentStmt) {
+		this.currentStmt = currentStmt;
+	}
+		
 }

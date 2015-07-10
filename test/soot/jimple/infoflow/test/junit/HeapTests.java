@@ -33,10 +33,10 @@ import soot.jimple.InstanceInvokeExpr;
 import soot.jimple.Stmt;
 import soot.jimple.infoflow.IInfoflow.AliasingAlgorithm;
 import soot.jimple.infoflow.Infoflow;
+import soot.jimple.infoflow.data.Abstraction;
 import soot.jimple.infoflow.data.AccessPath;
 import soot.jimple.infoflow.entryPointCreators.DefaultEntryPointCreator;
 import soot.jimple.infoflow.results.InfoflowResults;
-import soot.jimple.infoflow.solver.IInfoflowCFG;
 import soot.jimple.infoflow.source.ISourceSinkManager;
 import soot.jimple.infoflow.source.SourceInfo;
 import soot.jimple.infoflow.taintWrappers.AbstractTaintWrapper;
@@ -404,15 +404,9 @@ public class HeapTests extends JUnitTests {
 		Infoflow.setAccessPathLength(3);
 
 		infoflow.setTaintWrapper(new AbstractTaintWrapper() {
-			
+						
 			@Override
-			public void initialize() {
-				// nothing to initialize
-			}
-			
-			@Override
-			public boolean isExclusiveInternal(Stmt stmt, AccessPath taintedPath,
-					IInfoflowCFG icfg) {
+			public boolean isExclusiveInternal(Stmt stmt, AccessPath taintedPath) {
 				return stmt.containsInvokeExpr()
 						&& (stmt.getInvokeExpr().getMethod().getName()
 								.equals("foo2") || stmt.getInvokeExpr()
@@ -420,8 +414,8 @@ public class HeapTests extends JUnitTests {
 			}
 
 			@Override
-			public Set<AccessPath> getTaintsForMethod(Stmt stmt,
-					AccessPath taintedPath, IInfoflowCFG icfg) {
+			public Set<AccessPath> getTaintsForMethodInternal(Stmt stmt,
+					AccessPath taintedPath) {
 				if (!stmt.containsInvokeExpr())
 					return Collections.singleton(taintedPath);
 
@@ -479,9 +473,16 @@ public class HeapTests extends JUnitTests {
 			}
 
 			@Override
-			public boolean supportsCallee(Stmt callSite, IInfoflowCFG icfg) {
+			public boolean supportsCallee(Stmt callSite) {
 				return false;
 			}
+
+			@Override
+			public Set<Abstraction> getAliasesForMethod(Stmt stmt,
+					Abstraction d1, Abstraction taintedPath) {
+				return null;
+			}
+			
 		});
 
 		infoflow.setInspectSources(false);
@@ -990,7 +991,8 @@ public class HeapTests extends JUnitTests {
 				new ISourceSinkManager() {
 			
 			@Override
-			public boolean isSink(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg) {
+			public boolean isSink(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg,
+					AccessPath ap) {
 				return sCallSite.containsInvokeExpr()
 						&& sCallSite.getInvokeExpr().getMethod().getSignature().equals(sinkMethod);
 			}
@@ -1000,16 +1002,11 @@ public class HeapTests extends JUnitTests {
 				if (sCallSite instanceof AssignStmt) {
 					AssignStmt assignStmt = (AssignStmt) sCallSite;
 					if (assignStmt.getRightOp().toString().contains("taintedBySourceSinkManager"))
-						return new SourceInfo(true);
+						return new SourceInfo(new AccessPath(assignStmt.getLeftOp(), true));
 					else
 						return null;
 				}
 				return null;
-			}
-
-			@Override
-			public boolean leaks(Stmt sCallSite, InterproceduralCFG<Unit, SootMethod> cfg, int index, AccessPath ap) {
-				return isSink(sCallSite, cfg);
 			}
 			
 		});

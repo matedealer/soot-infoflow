@@ -3,11 +3,9 @@ package soot.jimple.infoflow.data.pathBuilders;
 import heros.solver.CountingThreadPoolExecutor;
 import heros.solver.Pair;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
-import java.util.List;
 import java.util.Set;
 import java.util.Stack;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -21,7 +19,7 @@ import soot.jimple.infoflow.data.Abstraction;
 import soot.jimple.infoflow.data.AbstractionAtSink;
 import soot.jimple.infoflow.data.SourceContextAndPath;
 import soot.jimple.infoflow.results.InfoflowResults;
-import soot.jimple.infoflow.solver.IInfoflowCFG;
+import soot.jimple.infoflow.solver.cfg.IInfoflowCFG;
 
 /**
  * Recursive algorithm for reconstructing abstraction paths from sink to source
@@ -113,7 +111,7 @@ public class RecursivePathBuilder extends AbstractAbstractionPathBuilder {
 			if (isMethodEnter)
 				if (!newCallStack.isEmpty()) {
 					Pair<Stmt, Set<Abstraction>> newStackTop = newCallStack.isEmpty() ? null : newCallStack.peek();
-					if (newStackTop.getO1() != null) {
+					if (newStackTop != null && newStackTop.getO1() != null) {
 						if (curAbs.getCurrentStmt() != newStackTop.getO1())
 							scanPreds = false;
 						newCallStack.pop();
@@ -159,12 +157,12 @@ public class RecursivePathBuilder extends AbstractAbstractionPathBuilder {
 							Collections.newSetFromMap(new IdentityHashMap<Abstraction,Boolean>())));
 		    		for (SourceContextAndPath context : getPaths(lastTaskId++,
 		    				abs.getAbstraction(), initialStack)) {
-		    			List<Stmt> newPath = new ArrayList<>(context.getPath());
-		    			newPath.add(abs.getSinkStmt());
 						results.addResult(abs.getAbstraction().getAccessPath(),
 								abs.getSinkStmt(),
-								context.getAccessPath(), context.getStmt(), context.getUserData(),
-								newPath);
+								context.getAccessPath(),
+								context.getStmt(),
+								context.getUserData(),
+								context.getAbstractionPath());
 		    		}
 				}
 				
